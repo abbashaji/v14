@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<!--
+  packages/web/demo/motion_crowd.html  —  a crowd of generated humans walking,
+  wandering and idling on PROCEDURALLY GENERATED motion. Every pose on this
+  page is computed at runtime by packages/web/demo/motion/{ik,locomotion,
+  steering}.js — NO baked animation data is loaded or used anywhere on this
+  page (nothing under rust-core/dance_clips/ is fetched). This exists to
+  demonstrate that the crowd/fitted-skeleton system (skeleton_fit.js) is not
+  limited to the baked-mocap dance showcase (crowd_dance.html).
+
+  Serve from the REPO ROOT (same as the other demos):
+    python3 -m http.server 8000
+  then open http://localhost:8000/packages/web/demo/motion_crowd.html
+
+  PIPELINE (per character, per frame)
+  ------------------------------------
+  1. motion/steering.js  stepWander()      -> x, z, heading, speed (metres,
+     radians, m/s) — an independent seeded wander/pause state per character.
+  2. motion/locomotion.js locomotionPose() -> a full-body walk/idle pose in
+     a character-local "walk frame" (metres; origin at ground level under
+     the pelvis, +Z = facing/walking direction). Cross-fades idle <-> walk
+     by speed, so paused characters breathe/sway instead of freezing.
+  3. Each leg's foot target from that pose is converted into this specific
+     character's fitted-skeleton space (skeleton_fit.js buildFitter().fit()),
+     and motion/ik.js solveTwoBoneIK() finds the hip/knee/ankle world
+     positions that place the foot there.
+  4. Those IK world positions are converted into joint LOCAL quaternions
+     (see "IK -> joint rotation" below) and written onto the character's
+     skinned-mesh bones.
+  5. Hip sway/bob, spine counter-yaw and arm swing are small direct
+     rotation/translation offsets (no IK needed for these, per the merge
+     spec) layered on top.
+  6. The character's THREE.Group position/rotation is set from the wander
+     state's x/z/heading.
+
+  IK -> joint rotation (the one genuinely new piece of math this page adds)
+  ---------------------------------------------------------------------------
+  solveTwoBoneIK returns WORLD positions for the mid/end joints of a leg, not
+  rotations, and skinning needs per-joint LOCAL quaternions. For each of the
+  two 2-joint sub-chains in a leg (hip->knee via its twist joint, then
+  knee->ankle via its twist joint):
+    - bindDir  = direction between those two joints' BIND world positions
+                 (from THIS character's own fitter.fit(...).worldPos, so it
+                 already reflects this body's proportions, not the default
+                 body's).
+    - desiredDir = direction between the corresponding IK output positions.
+    - delta = qFromTo(bindDir, desiredDir)   (ik.js)
+    - that sub-chain's first joint gets a new WORLD rotation of
+      qmul(delta, fitter.bindWorldQuat[joint]), which is then converted back
+      to a LOCAL rotation using the (possibly already-updated, for the
+      second sub-chain) world rotation of ITS parent — see
+      applyTwoSegmentChainIK() below.
+  This is a corrected version of the literal recipe in PHASE_1_MERGE_NOTES.md
+  Step 2 (which composes the delta directly onto the *local* bind rotation);
+  see that file for why, and for a numeric demonstration of the difference.
+  Twist joints are left at their bind rotation (not distributed) — a
+  documented Phase 1 simplification, per spec.
+
+  DNA / crowd setup, scene, blob shadows, error-box + need() import guard:
+  copied from crowd_dance.html (read-only reference) and adapted; see that
+  file's own header comment for why they look the way they do.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>AnthroForge — generative motion crowd demo</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #14151a; color: #e8e8ec; margin: 0; padding: 20px;
+  }
+  h1 { font-size: 1.15rem; font-weight: 600; margin: 0 0 4px; }
+  p.sub { color: #9a9aa5; margin: 0 0 14px; font-size: 0.85rem; max-width: 780px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  label { font-size: 0.85rem; color: #c4c4cc; }
+  input[type="number"] {
+    width: 80px; padding: 8px 10px; border-radius: 6px; border: 1px solid #3a3a45;
+    background: #1c1d24; color: #e8e8ec; font-size: 0.9rem;
+  }
+  button {
+    background: #5b5bf0; color: white; border: none; padding: 9px 16px;
+    border-radius: 6px; font-size: 0.9rem; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #4a4adf; }
+  button:disabled { background: #3a3a45; cursor: not-allowed; }
+  #status { font-size: 0.82rem; color: #c4c4cc; }
+  #canvas-wrap { width: 1100px; max-width: 100%; }
+  canvas {
+    display: block; width: 100%; aspect-ratio: 16 / 9;
+    background: #1c1d24; border: 1px solid #2c2d36; border-radius: 8px;
+  }
+  .status-error {
+    margin-top: 12px; padding: 10px 12px; border-radius: 6px;
+    background: #3a1a1e; color: #ff8a8a; font-size: 0.82rem;
+    display: none; white-space: pre-wrap; word-break: break-word; max-width: 1100px;
+  }
+  .status-error.visible { display: block; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/build/three.module.js" } }
+</script>
+</head>
+
+<body>
+
+<h1>AnthroForge — generative motion crowd demo</h1>
+<p class="sub">
+  Generated humans walking and idling on fully procedural motion — no baked
+  mocap on this page. Each body gets its own fitted skeleton and its own
+  independent wander state.
+</p>
+
+<div class="toolbar">
+  <label for="countInput">Number of humans</label>
+  <input type="number" id="countInput" value="20" min="1" max="150" step="1" />
+  <button id="generateBtn" disabled>Generate</button>
+  <span id="status">Loading pack…</span>
+</div>
+
+<div id="canvas-wrap"><canvas id="canvas"></canvas></div>
+<div class="status-error" id="statusError"></div>
+
+<script type="module">
+  const PART_PACK_URL = new URL("../../../rust-core/packs/essentials.afpp", import.meta.url).href;
+  const MANIFEST_URL = new URL("../../../rust-core/packs/manifest.json", import.meta.url).href;
+  const MORPH_ID_MAP_URL = new URL("../../../rust-core/packs/morph_id_map.json", import.meta.url).href;
+
+  const HEAD_ID = 4001, TORSO_ID = 4002, ARMS_ID = 4003, LEGS_ID = 4004;
+  const HEIGHT_MIN = 0.87, HEIGHT_MAX = 1.13;        // heightModifier scales the mesh in Y
+  const WEIGHT_MIN = 0.8, WEIGHT_MAX = 1.3;          // weightModifier scales the mesh in X
+  const REF_HEIGHT = 16.66;                          // mesh height (engine units) of the default body
+  const UNIT = 1.75 / REF_HEIGHT;                    // engine units -> metres (default body = 1.75 m)
+  const MAX_SPEED = 1.1;                             // m/s, walking pace
+
+  const statusEl = document.getElementById("status");
+  const statusError = document.getElementById("statusError");
+  const generateBtn = document.getElementById("generateBtn");
+  const countInput = document.getElementById("countInput");
+  const canvas = document.getElementById("canvas");
+
+  function showError(msg) { statusError.textContent = msg; statusError.classList.add("visible"); }
+  function clearError() { statusError.textContent = ""; statusError.classList.remove("visible"); }
+
+  // Load the modules dynamically so a missing file produces a readable message
+  // (a static import failure only shows up in the browser console). Copied
+  // from crowd_dance.html's need() — same reason: readable errors when the
+  // server isn't run from the project root.
+  async function need(url) {
+    try { return await import(url); }
+    catch (e) {
+      const msg = `Could not load ${url}.\n\n` +
+        `This usually means the server is not running from the project's top-level folder (the one that contains\n` +
+        `"packages", "rust-core" and start_demo.bat), or part of the project is missing.\n` +
+        `Check that ${new URL(url, location.href).pathname} opens in your browser as JavaScript text, then hard-refresh (Ctrl+F5).`;
+      showError(msg); statusEl.textContent = "Failed to load — see error below.";
+      throw e;
+    }
+  }
+  const { init, generate, getSkeleton, getLastError } = await need("../dist/index.js");
+  const { toSkinnedMesh } = await need("../../web-three/dist/index.js");
+  const THREE = await need("three");
+  const { OrbitControls } = await need("./vendor/three/examples/jsm/controls/OrbitControls.js");
+  const { buildFitter, qmul, qinv } = await need("./dance/skeleton_fit.js");
+  const { solveTwoBoneIK, qFromTo } = await need("./motion/ik.js");
+  const { locomotionPose } = await need("./motion/locomotion.js");
+  const { makeWanderState, stepWander } = await need("./motion/steering.js");
+  const { CHAINS, JOINTS } = await need("./motion/skeleton_chains.js");
+
+  // ---------------------------------------------------------------------
+  // DNA: one adult body type per person (ethnicity x gender x young/old).
+  // Copied from crowd_dance.html verbatim — this is the fix for the old
+  // "3-6 random morphs" bug (see that file's header comment); do not
+  // reintroduce that bug here.
+  // ---------------------------------------------------------------------
+  async function loadBodyMorphs() {
+    const [mr, mm] = await Promise.all([fetch(MANIFEST_URL), fetch(MORPH_ID_MAP_URL)]);
+    if (!mr.ok) throw new Error(`failed to fetch manifest.json: ${mr.status}`);
+    if (!mm.ok) throw new Error(`failed to fetch morph_id_map.json: ${mm.status}`);
+    const manifest = await mr.json(), map = await mm.json();
+    const pack = manifest.packs.find((p) => p.id === "essentials");
+    if (!pack) throw new Error('manifest.json has no "essentials" pack');
+    const cats = new Set(pack.categories);
+    const young = [], old = [];
+    for (const [id, e] of Object.entries(map)) {
+      if (!cats.has(e.category)) continue;
+      const m = /^macrodetails\/[a-z]+-(?:male|female)-(young|old)\.target$/.exec(e.target ?? "");
+      if (m) (m[1] === "young" ? young : old).push(Number(id));
+    }
+    if (!young.length) throw new Error("no adult macrodetail morphs found in the essentials pack");
+    return { young, old };
+  }
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  function randomDna(bodies) {
+    const useOld = bodies.old.length && Math.random() < 0.2;
+    const morph = useOld ? { id: pick(bodies.old), weight: rand(0.5, 1) } : { id: pick(bodies.young), weight: 1 };
+    return {
+      seed: BigInt(Math.floor(Math.random() * 1e12)),
+      heightModifier: rand(HEIGHT_MIN, HEIGHT_MAX),
+      weightModifier: rand(WEIGHT_MIN, WEIGHT_MAX),
+      headId: HEAD_ID, torsoId: TORSO_ID, armsId: ARMS_ID, legsId: LEGS_ID,
+      clothingIds: [],
+      morphs: [morph],
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Scene setup — same visual style as crowd_dance.html.
+  // ---------------------------------------------------------------------
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1c1d24);
+  scene.fog = new THREE.Fog(0x1c1d24, 25, 70);
+
+  const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 200);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  function resizeRenderer() {
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width)), h = Math.max(1, Math.round(rect.height));
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", resizeRenderer);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+  sun.position.set(15, 25, 10);
+  scene.add(sun);
+  const rim = new THREE.DirectionalLight(0x7a86ff, 0.35);
+  rim.position.set(-12, 10, -18);
+  scene.add(rim);
+
+  function makeGroundTexture() {
+    const c = document.createElement("canvas");
+    c.width = c.height = 256;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#22232b"; ctx.fillRect(0, 0, 256, 256);
+    ctx.strokeStyle = "#33343e"; ctx.lineWidth = 2;
+    for (let i = 0; i <= 256; i += 32) {
+      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+  }
+  let plazaSize = 40;
+  const groundTex = makeGroundTexture();
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(plazaSize, plazaSize),
+    new THREE.MeshStandardMaterial({ map: groundTex, roughness: 0.95 }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+
+  const shadowTex = (() => {
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const x = c.getContext("2d"), g = x.createRadialGradient(32, 32, 2, 32, 32, 32);
+    g.addColorStop(0, "rgba(0,0,0,0.55)"); g.addColorStop(1, "rgba(0,0,0,0)");
+    x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  })();
+  const shadowMat = new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false });
+  const shadowGeo = new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  camera.position.set(0, 14, 22);
+  controls.target.set(0, 1.2, 0);
+  controls.update();
+
+  const crowdGroup = new THREE.Group();
+  scene.add(crowdGroup);
+
+  const CHARACTER_COLORS = [0x8aa0ff, 0x7be08a, 0xff9a6b, 0xe0b85f, 0xd97ad9, 0x5fd0d0];
+
+  // ---------------------------------------------------------------------
+  // Quaternion helpers used by the IK->rotation glue and the small
+  // hip/spine/arm offsets. qmul/qinv/qrot come from skeleton_fit.js
+  // (imported above); qFromTo comes from ik.js. Both modules share the
+  // same [x,y,z,w] Hamilton-product convention (verified: identical
+  // formulas), so mixing them is safe.
+  // ---------------------------------------------------------------------
+  function qAxisAngle(axis, angle) {
+    const h = angle / 2, s = Math.sin(h);
+    return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(h)];
+  }
+  const AXIS_X = [1, 0, 0], AXIS_Y = [0, 1, 0], AXIS_Z = [0, 0, 1];
+  function vsub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function vlen(a) { return Math.hypot(a[0], a[1], a[2]); }
+  function vnorm(a) { const l = vlen(a); return l > 1e-9 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 1]; }
+
+  // Converts a leg's IK world-space output into LOCAL quaternions for the
+  // chain's hip and knee joints (twist joints + ankle are left at bind —
+  // see header comment "IK -> joint rotation"). `chain` is a CHAINS.legL /
+  // CHAINS.legR style 5-entry array [hip, twist, knee, twist, ankle].
+  // `outLocalQuats` is a plain object keyed by joint index; only hip and
+  // knee get entries.
+  function applyTwoSegmentChainIK(chain, fitter, fitWorld, fitJoints, rootPos, midPos, endPos, outLocalQuats) {
+    const [rootIdx, twist1Idx, midIdx] = chain;
+    const endIdx = chain[4];
+    const bwq = fitter.bindWorldQuat;
+
+    const bindDir1 = vnorm(vsub(fitWorld[midIdx], fitWorld[rootIdx]));
+    const desiredDir1 = vnorm(vsub(midPos, rootPos));
+    const delta1 = qFromTo(bindDir1, desiredDir1);
+    const worldRootNew = qmul(delta1, bwq[rootIdx]);
+    const parentOfRoot = fitJoints[rootIdx].parentIndex;
+    const parentWorldRoot = parentOfRoot >= 0 ? bwq[parentOfRoot] : [0, 0, 0, 1];
+    outLocalQuats[rootIdx] = qmul(qinv(parentWorldRoot), worldRootNew);
+
+    // Twist joint's local rotation is unchanged (bind), but its WORLD
+    // rotation still moves with the hip above it — needed as the "parent
+    // world rotation" for the knee below.
+    const worldTwist1New = qmul(worldRootNew, fitJoints[twist1Idx].rotation);
+
+    const bindDir2 = vnorm(vsub(fitWorld[endIdx], fitWorld[midIdx]));
+    const desiredDir2 = vnorm(vsub(endPos, midPos));
+    const delta2 = qFromTo(bindDir2, desiredDir2);
+    const worldMidNew = qmul(delta2, bwq[midIdx]);
+    outLocalQuats[midIdx] = qmul(qinv(worldTwist1New), worldMidNew);
+  }
+
+  // ---------------------------------------------------------------------
+  // Crowd
+  // ---------------------------------------------------------------------
+  let characters = [];
+  let skeleton = null, fitter = null, bodies = null;
+  let bounds = { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
+
+  function clearCrowd() {
+    for (const ch of characters) {
+      crowdGroup.remove(ch.group); scene.remove(ch.shadow);
+      ch.mesh.geometry?.dispose?.();
+      ch.mesh.material?.dispose?.();
+    }
+    characters = [];
+  }
+
+  function buildCharacter(dna, homeX, homeZ, seed, colorIdx) {
+    const character = generate(dna);
+    if (character === null) return { error: getLastError() ?? "generate() returned null" };
+    const errAfter = getLastError();
+    if (errAfter) return { error: `succeeded but getLastError() fired: ${errAfter}` };
+
+    const fit = fitter.fit(character.positions);
+    const material = new THREE.MeshStandardMaterial({ color: CHARACTER_COLORS[colorIdx % CHARACTER_COLORS.length], roughness: 0.6, metalness: 0.05 });
+    // See crowd_dance.html for why restScale/restPivot are forced to identity here:
+    // fit.joints is already a per-character-fitted rest pose; stacking
+    // character.restScale/restPivot on top double-corrects (quantified worse,
+    // see crowd_dance.html's comment at the equivalent call site).
+    const mesh = toSkinnedMesh({ ...character, restScale: [1, 1, 1], restPivot: [0, 0, 0] }, fit.joints, material);
+    mesh.frustumCulled = false; // this body leaves its bind-pose bounds every frame
+
+    // Per-character floor reference (engine units, group-local): lowest of
+    // the two toe-base joints in BIND pose. group.position.y is set so this
+    // sits on the world floor (y=0), same approach as crowd_dance.html's
+    // `-minY * UNIT`, but from skeleton joints (cheap, no bounding-box
+    // recompute needed every frame once the mesh starts moving).
+    const floorYLocal = Math.min(fit.worldPos[JOINTS.toeBaseL][1], fit.worldPos[JOINTS.toeBaseR][1]);
+
+    // Per-leg segment lengths (engine units) for the IK solver, and
+    // hip-to-ankle / hip-to-hip derived measurements (converted to metres)
+    // for locomotionPose — computed from THIS character's actual fitted
+    // joints, not hardcoded (per spec).
+    const hipL = fit.worldPos[JOINTS.hipL], kneeL = fit.worldPos[JOINTS.kneeL], ankleL = fit.worldPos[JOINTS.ankleL];
+    const hipR = fit.worldPos[JOINTS.hipR], kneeR = fit.worldPos[JOINTS.kneeR], ankleR = fit.worldPos[JOINTS.ankleR];
+    const upperLenL = vlen(vsub(kneeL, hipL)), lowerLenL = vlen(vsub(ankleL, kneeL));
+    const upperLenR = vlen(vsub(kneeR, hipR)), lowerLenR = vlen(vsub(ankleR, kneeR));
+    const legReachL = upperLenL + lowerLenL, legReachR = upperLenR + lowerLenR;
+    const legLengthM = ((legReachL + legReachR) / 2) * UNIT; // metres, avg of both legs
+    // hipWidth as locomotion.js actually uses it: HALF the hip-to-hip
+    // distance (each foot is offset by exactly this much from centreline —
+    // see walkPose's `leftFoot.x: safeHipWidth`). The merge spec just says
+    // "hip-to-hip distance"; noted as a mismatch in PHASE_1_MERGE_NOTES.md.
+    const hipWidthM = (vlen(vsub(hipL, hipR)) / 2) * UNIT;
+    const centerX = (hipL[0] + hipR[0]) / 2, centerZ = (hipL[2] + hipR[2]) / 2;
+
+    const heading0 = rand(-Math.PI, Math.PI);
+    const wander = makeWanderState(homeX, homeZ, heading0, seed >>> 0);
+
+    const group = new THREE.Group();
+    group.scale.setScalar(UNIT);
+    group.position.set(homeX, -floorYLocal * UNIT, homeZ);
+    crowdGroup.add(group);
+    group.add(mesh);
+
+    const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+    shadow.position.set(homeX, 0.01, homeZ);
+    shadow.scale.setScalar(1.0 + 0.5 * dna.weightModifier);
+    scene.add(shadow);
+
+    return {
+      mesh, group, shadow, bones: mesh.skeleton.bones,
+      fitJoints: fit.joints, fitWorld: fit.worldPos,
+      upperLenL, lowerLenL, upperLenR, lowerLenR,
+      legLengthM, hipWidthM, centerX, centerZ, floorYLocal,
+      wander, poseSeed: (seed >>> 0) / 4294967296 * 97, // decorrelate idle phase from wander's own RNG stream
+      // Bind local rotation/translation snapshots for joints we perturb
+      // directly (root for hip bob/sway, spine base for counter-yaw, upper
+      // arms for swing) — needed since we compose deltas onto BIND, not
+      // onto whatever we happen to have written last frame.
+      bindRootRot: fit.joints[JOINTS.root].rotation, bindRootPos: fit.joints[JOINTS.root].translation,
+      bindSpineRot: fit.joints[CHAINS.spine[0]].rotation,
+      bindUpperArmLRot: fit.joints[JOINTS.upperArmL].rotation, bindUpperArmRRot: fit.joints[JOINTS.upperArmR].rotation,
+    };
+  }
+
+  function generateCrowd(count) {
+    clearCrowd();
+    let generated = 0;
+    const errors = [];
+
+    // Plaza sized the same cols/rows-driven way crowd_dance.html sizes its
+    // ground plane, then centred at the origin.
+    const cols = Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / cols);
+    const spacing = 2.4;
+    plazaSize = Math.max(40, (Math.max(cols, rows) + 4) * spacing);
+    ground.geometry.dispose();
+    ground.geometry = new THREE.PlaneGeometry(plazaSize, plazaSize);
+    groundTex.repeat.set(plazaSize / 4, plazaSize / 4);
+    const half = plazaSize / 2 - 1.5; // small inset so wander's own edge-avoidance has room
+    bounds = { minX: -half, maxX: half, minZ: -half, maxZ: half };
+
+    for (let i = 0; i < count; i++) {
+      const dna = randomDna(bodies);
+      const homeX = rand(bounds.minX * 0.6, bounds.maxX * 0.6);
+      const homeZ = rand(bounds.minZ * 0.6, bounds.maxZ * 0.6);
+      const seed = Math.floor(Math.random() * 0xffffffff);
+
+      const result = buildCharacter(dna, homeX, homeZ, seed, i);
+      if (result.error) { errors.push(`character ${i}: ${result.error}`); continue; }
+      characters.push(result);
+      generated++;
+    }
+
+    const maxSpan = Math.max(cols, rows) * spacing;
+    camera.position.set(0, Math.max(8, maxSpan * 0.5), Math.max(11, maxSpan * 0.68));
+    controls.target.set(0, 1.2, 0);
+    controls.update();
+    return { generated, errors };
+  }
+
+  // ---------------------------------------------------------------------
+  // Playback
+  // ---------------------------------------------------------------------
+  const t0 = performance.now();
+  const clock = () => (performance.now() - t0) / 1000;
+  let lastT = clock();
+
+  const POLE_DIR = [0, 0, 1]; // knee-forward bend hint; assumes the rig's
+  // local +Z is its facing direction (locomotion.js's documented walk-frame
+  // convention) — unverified against the real skeleton in this environment,
+  // see PHASE_1_MERGE_NOTES.md.
+
+  function solveLeg(ch, chain, upperLen, lowerLen, footWalkFrame) {
+    const rootIdx = chain[0];
+    const rootPos = ch.fitWorld[rootIdx];
+    const targetPos = [
+      ch.centerX + footWalkFrame.x / UNIT,
+      ch.floorYLocal + footWalkFrame.y / UNIT,
+      ch.centerZ + footWalkFrame.z / UNIT,
+    ];
+    return solveTwoBoneIK(rootPos, upperLen, lowerLen, targetPos, POLE_DIR);
+  }
+
+  function animateCharacter(ch, t, dt) {
+    stepWander(ch.wander, dt, bounds, MAX_SPEED);
+    const pose = locomotionPose(t, ch.wander.speed, ch.legLengthM, ch.hipWidthM, ch.poseSeed);
+
+    const ikL = solveLeg(ch, CHAINS.legL, ch.upperLenL, ch.lowerLenL, pose.leftFoot);
+    const ikR = solveLeg(ch, CHAINS.legR, ch.upperLenR, ch.lowerLenR, pose.rightFoot);
+
+    const localQuats = {};
+    applyTwoSegmentChainIK(CHAINS.legL, fitter, ch.fitWorld, ch.fitJoints, ch.fitWorld[CHAINS.legL[0]], ikL.midPos, ikL.endPos, localQuats);
+    applyTwoSegmentChainIK(CHAINS.legR, fitter, ch.fitWorld, ch.fitJoints, ch.fitWorld[CHAINS.legR[0]], ikR.midPos, ikR.endPos, localQuats);
+    for (const idxStr in localQuats) {
+      const q = localQuats[idxStr];
+      ch.bones[idxStr].quaternion.set(q[0], q[1], q[2], q[3]);
+    }
+
+    // Small direct offsets (no IK) — hip bob/sway on the root, spine
+    // counter-yaw, arm swing. Composed onto BIND rotation/translation each
+    // frame (not accumulated), per spec Step 3 point 4.
+    const yawQ = qAxisAngle(AXIS_Y, pose.hipSwayYaw);
+    const rollQ = qAxisAngle(AXIS_Z, pose.hipSwayRoll);
+    const rootQ = qmul(qmul(yawQ, rollQ), ch.bindRootRot);
+    const rootBone = ch.bones[JOINTS.root];
+    rootBone.quaternion.set(rootQ[0], rootQ[1], rootQ[2], rootQ[3]);
+    rootBone.position.set(ch.bindRootPos[0], ch.bindRootPos[1] + pose.hipBob / UNIT, ch.bindRootPos[2]);
+
+    const spineQ = qmul(qAxisAngle(AXIS_Y, pose.spineCounterYaw), ch.bindSpineRot);
+    const spineBone = ch.bones[CHAINS.spine[0]];
+    spineBone.quaternion.set(spineQ[0], spineQ[1], spineQ[2], spineQ[3]);
+
+    // Arm swing: approximate as a pitch (local X) on the upper-arm joint.
+    // Arm length isn't separately measured in Phase 1 (see merge notes);
+    // approximated as a fraction of leg length, matching the proportion
+    // locomotion.js itself already uses internally for hand-swing amplitude.
+    const armLenApprox = ch.legLengthM * 0.9;
+    const armAngleL = Math.atan2(pose.leftHand.z, Math.max(0.05, armLenApprox));
+    const armAngleR = Math.atan2(pose.rightHand.z, Math.max(0.05, armLenApprox));
+    const armQL = qmul(qAxisAngle(AXIS_X, armAngleL), ch.bindUpperArmLRot);
+    const armQR = qmul(qAxisAngle(AXIS_X, armAngleR), ch.bindUpperArmRRot);
+    const armBoneL = ch.bones[JOINTS.upperArmL], armBoneR = ch.bones[JOINTS.upperArmR];
+    armBoneL.quaternion.set(armQL[0], armQL[1], armQL[2], armQL[3]);
+    armBoneR.quaternion.set(armQR[0], armQR[1], armQR[2], armQR[3]);
+
+    // Group transform from the wander state. Heading sign flip: steering.js
+    // documents "heading=0 -> +Z, increasing heading sweeps +Z toward -X"
+    // (a convention it chose itself), which is the OPPOSITE rotation
+    // direction from three.js's rotation.y (which sweeps local +Z toward
+    // +X as the angle increases) — see PHASE_1_MERGE_NOTES.md.
+    ch.group.position.set(ch.wander.x, -ch.floorYLocal * UNIT, ch.wander.z);
+    ch.group.rotation.y = -ch.wander.heading;
+    ch.shadow.position.set(ch.wander.x, 0.01, ch.wander.z);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock();
+    const dt = Math.min(0.1, Math.max(1 / 240, t - lastT));
+    lastT = t;
+    for (const ch of characters) animateCharacter(ch, t, dt);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  // ---------------------------------------------------------------------
+  // Boot / UI wiring
+  // ---------------------------------------------------------------------
+  async function boot() {
+    try {
+      const [b] = await Promise.all([
+        loadBodyMorphs(),
+        init({ partPackUrl: PART_PACK_URL, licenseKey: "" }),
+      ]);
+      bodies = b;
+
+      skeleton = getSkeleton();
+      if (!skeleton) throw new Error(`getSkeleton() returned null: ${getLastError() ?? "(no message)"}`);
+
+      // Reference body (no morphs, height = weight = 1) that the skeleton
+      // was authored for — same approach as crowd_dance.html.
+      const ref = generate({ seed: 1n, heightModifier: 1, weightModifier: 1, headId: HEAD_ID, torsoId: TORSO_ID, armsId: ARMS_ID, legsId: LEGS_ID, clothingIds: [], morphs: [] });
+      if (ref === null) throw new Error(`reference generate() failed: ${getLastError() ?? "(no message)"}`);
+      fitter = buildFitter(skeleton, ref.positions);
+
+      resizeRenderer();
+      statusEl.textContent = "Ready.";
+      generateBtn.disabled = false;
+      runGenerate();
+      animate();
+    } catch (err) {
+      showError(`Startup failed: ${err?.message ?? err}`);
+      statusEl.textContent = "Failed to load — see error below.";
+    }
+  }
+
+  function runGenerate() {
+    clearError();
+    const count = Math.max(1, Math.min(150, Math.floor(Number(countInput.value) || 1)));
+    countInput.value = count;
+    generateBtn.disabled = true;
+    statusEl.textContent = `Generating ${count} characters…`;
+
+    requestAnimationFrame(() => {
+      const t0g = performance.now();
+      const { generated, errors } = generateCrowd(count);
+      const t1 = performance.now();
+      statusEl.textContent =
+        `${generated}/${count} generated in ${(t1 - t0g).toFixed(0)} ms` +
+        (errors.length ? ` — ${errors.length} error(s), see below.` : ".");
+      if (errors.length) showError(errors.join("\n"));
+      generateBtn.disabled = false;
+    });
+  }
+
+  generateBtn.addEventListener("click", runGenerate);
+  countInput.addEventListener("keydown", (e) => { if (e.key === "Enter") runGenerate(); });
+
+  window.motionCrowd = { get characters() { return characters; }, fitter: () => fitter, camera, controls };
+  boot();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "anthroforge-dance-tools",
+  "private": true,
+  "type": "module",
+  "description": "Offline tools: retarget Mixamo FBX dance clips onto the AnthroForge skeleton.",
+  "dependencies": { "three": "0.186.0" }
+}

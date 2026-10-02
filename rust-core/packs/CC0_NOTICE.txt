@@ -1,0 +1,9 @@
+AnthroForge Part Pack - asset notice
+The mesh and morph-target data in this file derive from the system assets
+of the MakeHuman project (https://github.com/makehumancommunity/makehuman),
+which the MakeHuman Community releases under CC0 1.0 Universal
+(https://creativecommons.org/publicdomain/zero/1.0/legalcode).
+CC0 requires no attribution; this notice is given as a courtesy.
+This pack contains no MakeHuman source code, which is AGPL-3.0-or-later.
+Morph targets that this project's safety policy denies are not included.
+This pack is not endorsed by the MakeHuman Community.

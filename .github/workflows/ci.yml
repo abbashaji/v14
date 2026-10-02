@@ -84,3 +84,24 @@ jobs:
         with:
           name: dist-rebuilt
           path: packages/web/dist
+
+  baseline:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        working-directory: tools/ci
+        run: npm install
+      - name: Install Chromium
+        working-directory: tools/ci
+        run: npx playwright install --with-deps chromium
+      - name: Measure
+        run: node tools/ci/baseline.mjs --out baseline-ci.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baseline-table
+          path: baseline-ci.md

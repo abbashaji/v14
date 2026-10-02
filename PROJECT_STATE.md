@@ -23,11 +23,13 @@ How to build, run and test: see `RUN_LOCALLY.md`. CI is `.github/workflows/ci.ym
 - `cargo test --locked` in `rust-core/`.
 - `npm ci && npm test` in `packages/web/` and in `packages/web-three/`.
 - `node tools/ci/demo_smoke.mjs` from the repo root (needs Playwright's Chromium).
+- `node tools/ci/baseline.mjs --out BASELINE.md` from the repo root (regenerates the baseline table; needs Playwright's Chromium).
 
 ## Root files
 
 - `start_demo.bat`, `verify_diversity.mjs` — helper scripts at the root.
 - `anthroforge-wasm-sdk-product-spec-v2.md` — the SDK product spec.
+- `BASELINE.md` — per-pack load time, first-generate time and peak wasm memory (generated).
 
 ## Notes files (history, not current instructions)
 

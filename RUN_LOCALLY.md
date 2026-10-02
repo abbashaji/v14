@@ -58,3 +58,14 @@ The pack format is v2; v1 packs are rejected.
 - Rebuilding is done only by the `dist-rebuild` CI job (artifact, not committed)
   or by hand.
 - A rebuilt `dist/` is committed only in a phase that says so.
+
+## Baseline table
+
+```sh
+node tools/ci/baseline.mjs --out BASELINE.md   # from the repo root
+```
+- Needs Playwright's Chromium: `cd tools/ci && npm install && npx playwright install chromium`.
+- Load ms is the time `init()` takes in the page (loopback fetch, wasm instantiate, pack parse).
+- First generate ms is the time of the first `generate()` after init.
+- Peak wasm MiB is the size of the wasm linear memory after that generate.
+- `BASELINE.md` is the committed copy; the `baseline` CI job produces a runner-side copy as artifact `baseline-table`.

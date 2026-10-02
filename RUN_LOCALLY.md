@@ -1,4 +1,6 @@
-# Running the AnthroForge web demo locally
+# Running AnthroForge locally
+
+## Run the demo
 
 `packages/web/dist/` ships a pre-built wasm + JS, so you don't need Rust to try it.
 You only need a static file server, because browsers block `fetch()` of the
@@ -11,13 +13,19 @@ You only need a static file server, because browsers block `fetch()` of the
    ```
 2. Open `http://localhost:8000/packages/web/demo/index.html`.
 3. Move the Height / Weight / Ear / Nose sliders and click **Generate**. The
-   first click downloads a ~3.4 MB pack (the real CC0 body); you should see a
-   wireframe plus real generation time, vertex and index counts (53,512
-   vertices / 80,268 indices).
+   first click downloads a ~3.4 MB pack; you should see a wireframe plus
+   generation time, vertex and index counts (53,512 vertices / 80,268 indices).
 
-The demo has not been opened in a real browser since the CC0 change; if
-something looks off, the Node tests (`cd packages/web && npm test`) are the
-reliable check that the wasm and SDK work.
+The CI job `demo-smoke` is what checks the demo in a real browser, and it has
+not run yet unless this task ran it.
+
+## Run the tests
+
+```sh
+sh -c 'cd rust-core && cargo test --locked'
+sh -c 'cd packages/web && npm ci && npm test'
+sh -c 'cd packages/web-three && npm ci && npm test'
+```
 
 ## Rebuilding the wasm
 
@@ -31,8 +39,7 @@ on the CC0 core with an official toolchain; the wasm currently in `dist/` was bu
 (see `CC0_PHASE_7_NOTES.md`). If it fails on a dependency needing a newer Rust (`edition2024`), use a newer toolchain.
 
 `npm run build` reads `../../rust-core/target/wasm32-unknown-unknown/release/anthroforge_core.wasm`
-(override with `ANTHROFORGE_WASM_SRC`), optimizes it with binaryen and refuses to
-write it if validation fails.
+(override with `ANTHROFORGE_WASM_SRC`), optimizes it with binaryen and refuses to write it if validation fails.
 
 ## Rebuilding a Part Pack
 
@@ -43,3 +50,11 @@ cargo build --release --bin pack_builder
 ```
 Pass `assets/upstream/base.obj` as the third argument to enable morph targets.
 The pack format is v2; v1 packs are rejected.
+
+## dist/ policy
+
+- `dist/` stays tracked so the demo works without Rust.
+- The gating test commands never run `npm run build`.
+- Rebuilding is done only by the `dist-rebuild` CI job (artifact, not committed)
+  or by hand.
+- A rebuilt `dist/` is committed only in a phase that says so.

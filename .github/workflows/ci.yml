@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: cargo test
+        working-directory: rust-core
+        run: cargo test --locked
+
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: web install
+        working-directory: packages/web
+        run: npm ci
+      - name: web test
+        working-directory: packages/web
+        run: npm test
+      - name: web-three install
+        working-directory: packages/web-three
+        run: npm ci
+      - name: web-three test
+        working-directory: packages/web-three
+        run: npm test
+      - name: Tree must be clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            exit 1
+          fi
+
+  demo-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        working-directory: tools/ci
+        run: npm install
+      - name: Install Chromium
+        working-directory: tools/ci
+        run: npx playwright install --with-deps chromium
+      - name: Demo smoke test
+        run: node tools/ci/demo_smoke.mjs
+
+  dist-rebuild:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install stable Rust and wasm target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+      - name: Build wasm
+        working-directory: rust-core
+        run: cargo build --release --lib --target wasm32-unknown-unknown
+      - name: Build web package
+        working-directory: packages/web
+        run: npm ci && npm run build
+      - name: Diff against committed dist
+        run: git diff --stat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-rebuilt
+          path: packages/web/dist

@@ -82,6 +82,7 @@ mod vertex_duplication_map;
 mod morph_loader;
 mod morph_blend;
 mod safety;
+mod normals;
 
 pub use clothing_deformer::{
     build_cloth_anchors_for_part, fit_clothing_to_character, free_cloth_anchor_buffer,
@@ -1374,7 +1375,7 @@ pub extern "C" fn generate_character(dna: *const CharacterDNA) -> *mut MeshOutpu
         }
     };
 
-    let (merged_vertices, merged_indices) = match mesh_merge::merge_parts(&[
+    let (mut merged_vertices, merged_indices) = match mesh_merge::merge_parts(&[
         (head_vertices.as_slice(), head.indices.as_slice()),
         (torso_vertices.as_slice(), torso.indices.as_slice()),
         (arms_vertices.as_slice(), arms.indices.as_slice()),
@@ -1389,6 +1390,22 @@ pub extern "C" fn generate_character(dna: *const CharacterDNA) -> *mut MeshOutpu
             return std::ptr::null_mut();
         }
     };
+
+    // Morph targets carry no normal data (every `normal_delta` is zero), so
+    // the geometric change of the morph is transferred into the authored
+    // normals here, before the scale step below. Skipped when no morph
+    // resolved, which keeps unmorphed output identical.
+    if !active_morphs.is_empty() {
+        let base_positions: Vec<[f32; 3]> = head
+            .vertices
+            .iter()
+            .chain(torso.vertices.iter())
+            .chain(arms.vertices.iter())
+            .chain(legs.vertices.iter())
+            .map(|v| v.position)
+            .collect();
+        normals::transfer_morph_normals(&base_positions, &merged_indices, &mut merged_vertices);
+    }
 
     // CC0-Phase 13, Option 2: fit this character's own per-axis
     // scale+pivot BEFORE the height/weight scale-modifier step below

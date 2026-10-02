@@ -332,7 +332,11 @@ fn cc0_phase13_option2_verification() {
     println!("\n=== CC0-Phase 13 Option 2 verification (real essentials.afpp) ===\n");
 
     println!("-- generate_character timing / rest_scale,rest_pivot --");
-    let baby = generate(1020);
+    // 1020 is refused by the safety gate; 1095 is a permitted adult corner
+    // (`macrodetails/height/female-young-minmuscle-minweight-minheight`) with the
+    // strongest shrink among permitted essentials morphs; the local name `baby`
+    // means "the shrunken character".
+    let baby = generate(1095);
     let adult = generate(1023);
 
     println!(
@@ -432,7 +436,7 @@ fn cc0_phase13_option2_verification() {
             equipped_clothing_count: 0,
             arms_id: 4003,
             legs_id: 4004,
-            active_morph_ids_ptr: [1020u16].as_ptr(),
+            active_morph_ids_ptr: [1095u16].as_ptr(),
             active_morph_weights_ptr: [1.0f32].as_ptr(),
             active_morph_count: 1,
         } as *const CharacterDNA);

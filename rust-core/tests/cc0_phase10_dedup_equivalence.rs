@@ -21,6 +21,11 @@ fn dump_fingerprints() {
     assert!(init_part_registry_from_pack(bytes.as_ptr(), bytes.len()));
     let mut s = String::new();
     for id in ids {
+        // `generate_character` refuses denied ids by design (src/safety.rs),
+        // so there is nothing to fingerprint for them: skip.
+        if anthroforge_core::is_denied_morph_id(id) {
+            continue;
+        }
         let (i, w) = ([id], [1.0f32]);
         let dna = CharacterDNA {
             seed: 42, height_modifier: 1.0, weight_modifier: 1.0,

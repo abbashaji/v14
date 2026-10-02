@@ -130,6 +130,7 @@
   import { init, generate, getSkeleton, getLastError } from "../dist/index.js";
   import { toSkinnedMesh } from "../../web-three/dist/index.js";
   import * as THREE from "three";
+  import { isDeniedMorphEntry } from "./identity_sampling.js";
   import { OrbitControls } from "./vendor/three/examples/jsm/controls/OrbitControls.js";
 
   const PART_PACK_URL = new URL("../../../rust-core/packs/essentials.afpp", import.meta.url).href;
@@ -180,7 +181,7 @@
     if (!essentialsPack) throw new Error('manifest.json has no pack with id "essentials"');
     const cats = new Set(essentialsPack.categories);
     const ids = [];
-    for (const [idStr, entry] of Object.entries(morphIdMap)) if (cats.has(entry.category)) ids.push(Number(idStr));
+    for (const [idStr, entry] of Object.entries(morphIdMap)) if (cats.has(entry.category) && !isDeniedMorphEntry(entry)) ids.push(Number(idStr));
     if (!ids.length) throw new Error("no real morph ids matched essentials categories");
     return ids;
   }

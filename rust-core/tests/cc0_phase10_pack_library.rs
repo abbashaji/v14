@@ -81,8 +81,14 @@ fn every_morph_in_pack_loads_and_applies() {
     for p in &base { lo = lo.min(p[1]); hi = hi.max(p[1]); }
     let body_h = hi - lo;
     eprintln!("base body height (Y extent): {body_h:.3}");
-    let (mut zero, mut max_d) = (Vec::new(), 0.0f32);
+    let (mut zero, mut max_d, mut refused) = (Vec::new(), 0.0f32, 0usize);
     for &id in &ids {
+        // `generate_character` refuses denied ids by design (src/safety.rs),
+        // so there is nothing to apply for them: count and skip.
+        if anthroforge_core::is_denied_morph_id(id) {
+            refused += 1;
+            continue;
+        }
         let (i, w) = ([id], [1.0f32]);
         let pos = positions(&dna(i.as_ptr(), w.as_ptr(), 1));
         let d = pos.iter().zip(&base).map(|(a, b)| {
@@ -92,6 +98,6 @@ fn every_morph_in_pack_loads_and_applies() {
         max_d = max_d.max(d);
         assert!(d.is_finite() && d < body_h, "morph {id}: displacement {d} exceeds body height {body_h}");
     }
-    eprintln!("applied {} morphs individually; zero-displacement: {} {:?}; max displacement {:.4}",
-              ids.len(), zero.len(), zero, max_d);
+    eprintln!("applied {} morphs individually ({} denied ids skipped); zero-displacement: {} {:?}; max displacement {:.4}",
+              ids.len() - refused, refused, zero.len(), zero, max_d);
 }

@@ -59,13 +59,25 @@ export const WEIGHT_MIN = 0.5, WEIGHT_MAX = 1.5;
 export const IDENTITY_CORNER_RE =
   /^macrodetails\/(african|asian|caucasian)-(female|male)-(baby|child|young|old)\.target$/;
 
+/**
+ * Public builds never request these morphs: a target name with a `baby` or
+ * `child` token (any category) and everything in category `genitals`.
+ * `rust-core/src/safety.rs` is the enforcing gate; this mirrors its rule on
+ * target names so the demo sampling code never offers a denied id.
+ */
+export const MINOR_TARGET_RE = /(^|[-/_.])(baby|child)([-/_.]|$)/;
+export function isDeniedMorphEntry(entry) {
+  return entry.category === "genitals" || MINOR_TARGET_RE.test(entry.target);
+}
+
 /** Pool names accepted by selectIdentityCorners(). */
-export const POOL_IDENTITY_CORNERS = "identity-corners"; // default: the 24
-export const POOL_ALL_MACRODETAILS = "all-macrodetails"; // literal: all 348
+export const POOL_IDENTITY_CORNERS = "identity-corners"; // default: the 24 corners minus baby/child = 12
+export const POOL_ALL_MACRODETAILS = "all-macrodetails"; // literal: all 348 minus denied = 192
 
 /**
  * Filters morph_id_map.json down to the ids eligible to be a character's
- * single identity.
+ * single identity. Denied morphs (see isDeniedMorphEntry) are never
+ * returned from any pool.
  *
  * @param {Record<string, {category: string, target: string}>} morphIdMap
  *        parsed morph_id_map.json
@@ -86,6 +98,7 @@ export function selectIdentityCorners(
   const out = [];
   for (const [idStr, entry] of Object.entries(morphIdMap)) {
     if (!cats.has(entry.category)) continue;
+    if (isDeniedMorphEntry(entry)) continue;
     if (pool === POOL_IDENTITY_CORNERS && !IDENTITY_CORNER_RE.test(entry.target)) continue;
     out.push({ id: Number(idStr), target: entry.target });
   }

@@ -81,12 +81,14 @@ mod texture_atlas;
 mod vertex_duplication_map;
 mod morph_loader;
 mod morph_blend;
+mod safety;
 
 pub use clothing_deformer::{
     build_cloth_anchors_for_part, fit_clothing_to_character, free_cloth_anchor_buffer,
 };
 pub use error::anthroforge_last_error;
 pub use obj_loader::{load_obj_bytes, LoadedObjMesh, ObjLoadError};
+pub use safety::is_denied_morph_id;
 pub use texture_atlas::{free_atlas_buffer, generate_runtime_atlas};
 
 use error::{clear_last_error, set_last_error};
@@ -1284,6 +1286,22 @@ pub extern "C" fn generate_character(dna: *const CharacterDNA) -> *mut MeshOutpu
                 )
             }
         };
+
+    // Safety gate (see `safety.rs`). It runs before id resolution on
+    // purpose: resolution below silently skips any id the loaded pack does
+    // not hold, so checking after it would let a denied id through
+    // unnoticed on every pack that lacks it.
+    if let Some((id, rule)) = safety::first_denied(active_morph_ids) {
+        eprintln!(
+            "[anthroforge] generate_character: safety: refused morph id {id} ({})",
+            rule.name()
+        );
+        set_last_error(format!(
+            "generate_character: safety: refused morph id {id} ({}); public builds do not generate minors or genital targets",
+            rule.name()
+        ));
+        return std::ptr::null_mut();
+    }
 
     // Resolve each active morph id against the registry, exactly like
     // equipped clothing ids further below: an id with no matching loaded

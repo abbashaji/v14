@@ -51,6 +51,18 @@ cargo build --release --bin pack_builder
 Pass `assets/upstream/base.obj` as the third argument to enable morph targets.
 The pack format is v2; v1 packs are rejected.
 
+`pack_builder` output holds every morph it was given, the denied ones included.
+The distributed packs are that output run through `pack_strip`, which removes
+the morph ids denied by `safety.rs` and appends the CC0/MakeHuman notice as a
+footer (see `SAFETY.md`, "Packs"):
+
+```sh
+# from the repo root
+cargo build --release --manifest-path rust-core/Cargo.toml --bin pack_strip
+rust-core/target/release/pack_strip <in.afpp> <out.afpp> rust-core/packs/CC0_NOTICE.txt
+```
+Exit codes: 0 ok, 1 input/format/I-O error, 2 usage.
+
 ## dist/ policy
 
 - `dist/` stays tracked so the demo works without Rust.

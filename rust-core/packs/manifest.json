@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "note": "morph_id is globally unique and identical in every pack that contains the morph (so packs that are subsets of one another share IDs by design). morph_id_range is the min/max of the ALLOCATED blocks of the pack's categories; use morph_id_ranges_by_category for the exact blocks and morph_id_map.json for id->source-target. Phase 10: morphs are AFMT v2 (i16-quantized deltas) and packs are built with content-hash dedup on by default (masking the embedded per-blob morph_id, which is never read at load time -- see PHASE_10_MERGE_NOTES.md). phase8_size_bytes and phase10_vs_phase8_ratio on each pack record the prior Phase 8 (v1, no dedup) baseline for comparison.",
+  "note": "morph_id is globally unique and identical in every pack that contains the morph (so packs that are subsets of one another share IDs by design). morph_id_range is the min/max of the ALLOCATED blocks of the pack's categories; use morph_id_ranges_by_category for the exact blocks and morph_id_map.json for id->source-target. Phase 10: morphs are AFMT v2 (i16-quantized deltas) and packs are built with content-hash dedup on by default (masking the embedded per-blob morph_id, which is never read at load time -- see PHASE_10_MERGE_NOTES.md). phase8_size_bytes and phase10_vs_phase8_ratio on each pack record the prior Phase 8 (v1, no dedup) baseline for comparison. The packs are the output of pack_strip: morph ids denied by safety.rs (228 minor, 6 genital) are removed and a CC0/MakeHuman notice footer follows the last section. size_bytes, morph_count, unique_blob_count, categories and morph_id_range describe the stripped files; morph_id_ranges_by_category and morph_id_map.json stay complete.",
   "morph_id_ranges_by_category": {
     "macrodetails": [
       1000,
@@ -100,10 +100,10 @@
       "id": "essentials",
       "file": "essentials.afpp",
       "label": "Essentials",
-      "description": "Core body macro sliders (age, weight, muscle, gender, height family): MakeHuman's whole-population targets. Fewest morphs, and now the pack with the single largest byte reduction in Phase 10 (v2 quantization + content-hash dedup: 348 morphs collapse to 145 unique blobs, largely symmetric/paired macrodetail targets sharing identical deltas).",
-      "size_bytes": 33654639,
+      "description": "Core body macro sliders (age, weight, muscle, gender, height family): MakeHuman's whole-population targets. Fewest morphs, and now the pack with the single largest byte reduction in Phase 10 (v2 quantization + content-hash dedup: 192 morphs collapse to 87 unique blobs, largely symmetric/paired macrodetail targets sharing identical deltas).",
+      "size_bytes": 22202221,
       "part_count": 4,
-      "morph_count": 348,
+      "morph_count": 192,
       "morph_id_range": [
         1000,
         1399
@@ -111,21 +111,21 @@
       "categories": [
         "macrodetails"
       ],
-      "unique_blob_count": 145,
+      "unique_blob_count": 87,
       "phase8_size_bytes": 148523601,
-      "phase10_vs_phase8_ratio": 4.4132
+      "phase10_vs_phase8_ratio": 6.6896
     },
     {
       "id": "body-shape",
       "file": "body-shape.afpp",
       "label": "Body shape",
-      "description": "Body proportion and build variety (macro sliders, arms/legs, body shapes, torso, neck, hip, stomach, pelvis, buttocks, breast, genitals). No face. 806 morphs dedup to 548 unique blobs.",
-      "size_bytes": 42571449,
+      "description": "Body proportion and build variety (macro sliders, arms/legs, body shapes, torso, neck, hip, stomach, pelvis, buttocks, breast). No face. 572 morphs dedup to 435 unique blobs.",
+      "size_bytes": 30683973,
       "part_count": 4,
-      "morph_count": 806,
+      "morph_count": 572,
       "morph_id_range": [
         1000,
-        2699
+        2599
       ],
       "categories": [
         "macrodetails",
@@ -137,19 +137,18 @@
         "stomach",
         "pelvis",
         "buttocks",
-        "breast",
-        "genitals"
+        "breast"
       ],
-      "unique_blob_count": 548,
+      "unique_blob_count": 435,
       "phase8_size_bytes": 164753473,
-      "phase10_vs_phase8_ratio": 3.87
+      "phase10_vs_phase8_ratio": 5.3694
     },
     {
       "id": "face-shape",
       "file": "face-shape.afpp",
       "label": "Face shape",
       "description": "Facial identity variety (head, nose, ears, mouth, cheek, chin, forehead, eyebrows, eyes, asymmetry). No duplicate blobs in this pack (332/332) -- the size drop here is purely the Phase 10 v2 i16 quantization.",
-      "size_bytes": 6709009,
+      "size_bytes": 6709595,
       "part_count": 4,
       "morph_count": 332,
       "morph_id_range": [
@@ -170,14 +169,14 @@
       ],
       "unique_blob_count": 332,
       "phase8_size_bytes": 9201681,
-      "phase10_vs_phase8_ratio": 1.3715
+      "phase10_vs_phase8_ratio": 1.3714
     },
     {
       "id": "expressions",
       "file": "expressions.afpp",
       "label": "Expressions",
       "description": "POSED FACIAL EXPRESSIONS (smile, frown, etc.). Not shape/identity diversity: a different purpose from the body-shape and face-shape packs -- present it as its own picker category, not blended with them. 102 morphs dedup to 67 unique blobs.",
-      "size_bytes": 3843571,
+      "size_bytes": 3844157,
       "part_count": 4,
       "morph_count": 102,
       "morph_id_range": [
@@ -189,14 +188,14 @@
       ],
       "unique_blob_count": 67,
       "phase8_size_bytes": 4424893,
-      "phase10_vs_phase8_ratio": 1.1512
+      "phase10_vs_phase8_ratio": 1.1511
     },
     {
       "id": "measurement-fit",
       "file": "measurement-fit.afpp",
       "label": "Measurement fit",
       "description": "Targets suited to a future 'type in real height/waist/chest, reverse-fit' feature. Kept separate so that feature can load just this small pack. No duplicate blobs in this pack (40/40).",
-      "size_bytes": 5601945,
+      "size_bytes": 5602531,
       "part_count": 4,
       "morph_count": 40,
       "morph_id_range": [
@@ -208,16 +207,16 @@
       ],
       "unique_blob_count": 40,
       "phase8_size_bytes": 7274101,
-      "phase10_vs_phase8_ratio": 1.2985
+      "phase10_vs_phase8_ratio": 1.2984
     },
     {
       "id": "full",
       "file": "full.afpp",
       "label": "Full library",
-      "description": "The entire MakeHuman CC0 target corpus, unfiltered (all 23 categories). Power-user / offline option; not a default download. 1,280 morphs dedup to 985 unique blobs.",
-      "size_bytes": 48486671,
+      "description": "The MakeHuman CC0 target corpus minus the 234 denied morphs (22 categories). Power-user / offline option; not a default download. 1,046 morphs dedup to 872 unique blobs.",
+      "size_bytes": 36599195,
       "part_count": 4,
-      "morph_count": 1280,
+      "morph_count": 1046,
       "morph_id_range": [
         1000,
         3999
@@ -233,7 +232,6 @@
         "pelvis",
         "buttocks",
         "breast",
-        "genitals",
         "head",
         "nose",
         "ears",
@@ -247,9 +245,9 @@
         "expression",
         "measure"
       ],
-      "unique_blob_count": 985,
+      "unique_blob_count": 872,
       "phase8_size_bytes": 175542297,
-      "phase10_vs_phase8_ratio": 3.6204
+      "phase10_vs_phase8_ratio": 4.7963
     }
   ]
 }

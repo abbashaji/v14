@@ -30,11 +30,19 @@ rule on target names in `isDeniedMorphEntry`
 Edit the tables in `safety.rs` and `isDeniedMorphEntry`. The test
 `denied_set_equals_upstream_ground_truth` fails until the tables match the map.
 
+## Packs
+
+- The distributed packs in `rust-core/packs/` are the output of `pack_strip`:
+  ids denied by `is_denied_morph_id` are removed and a notice footer is added.
+- `morph_id_map.json` stays complete; `manifest.json` describes the stripped files.
+- The tests `shipped_packs_*` check the manifest, the held ids and the footer.
+- A pack made with `pack_builder` or `rust-core/scripts/build_pack_library.py`
+  holds the denied morphs until `pack_strip` is run on it. The gate in
+  `generate_character` is what enforces the rule for any pack.
+
 ## Not covered yet
 
 - The wasm in `packages/web/dist/` is not rebuilt, so the shipped browser build
   does not enforce this until a later rebuild.
-- The packs still contain the denied morphs (`full.afpp` 234, `essentials.afpp`
-  156).
 - No clothed-output check exists; height/weight modifiers are not range-checked in the core.
 - Breast targets named `nipple` (ids 2524..=2527) are not denied.

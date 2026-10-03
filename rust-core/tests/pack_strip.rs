@@ -511,15 +511,26 @@ fn synthetic_pack_drops_exactly_the_denied_ids() {
 }
 
 /// (name, kept, dropped, unique blobs, data region bytes, FNV-1a-64 of the data region)
+///
+/// The inputs are the shipped packs, which are already the output of
+/// `pack_strip`, so `dropped` is 0 for all six and the tool must reproduce
+/// each input byte for byte. The values for kept, unique blobs, data region
+/// bytes and FNV are those measured when the packs were produced from the
+/// original, unstripped packs; that proof that the tool strips the originals
+/// exactly is these pinned values together with the SHA-256 check made when
+/// the packs were produced.
 const REAL_PACKS: [(&str, usize, usize, usize, usize, u64); 6] = [
-    ("essentials", 192, 156, 87, 22201635, 0xa61a37e94bafa3c2),
-    ("body-shape", 572, 234, 435, 30683387, 0x2a8106395f9b6b37),
+    ("essentials", 192, 0, 87, 22201635, 0xa61a37e94bafa3c2),
+    ("body-shape", 572, 0, 435, 30683387, 0x2a8106395f9b6b37),
     ("face-shape", 332, 0, 332, 6709009, 0xb7924df99efd687d),
     ("expressions", 102, 0, 67, 3843571, 0x61c52cb36086c5fa),
     ("measurement-fit", 40, 0, 40, 5601945, 0xf08af1f681f211d6),
-    ("full", 1046, 234, 872, 36598609, 0x7b2ac4dd991021be),
+    ("full", 1046, 0, 872, 36598609, 0x7b2ac4dd991021be),
 ];
 
+/// Runs the tool on every shipped pack (already stripped): the kept ids,
+/// unique blobs and data region match the pinned values, nothing is dropped,
+/// and the output file equals the input file byte for byte.
 #[test]
 fn real_packs_are_stripped_exactly() {
     let tmp = TempDir::new("real");
@@ -558,9 +569,7 @@ fn real_packs_are_stripped_exactly() {
         assert_eq!(data.len(), data_len, "{name}: data region bytes");
         assert_eq!(fnv1a64(data), fnv, "{name}: FNV-1a-64 of the data region");
 
-        if matches!(name, "face-shape" | "expressions" | "measurement-fit") {
-            assert!(data == &input[..], "{name}: data region must equal the input");
-        }
+        assert!(output == input, "{name}: the output must equal the (already stripped) input byte for byte");
 
         if name == "measurement-fit" {
             let crlf_path = tmp.path().join("notice_crlf.txt");

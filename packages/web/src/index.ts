@@ -92,7 +92,8 @@ export interface GeneratedCharacter {
 
 export interface InitOptions {
   partPackUrl: string;
-  licenseKey: string;
+  /** Accepted and ignored today; reserved for a future license check. */
+  licenseKey?: string;
 }
 
 export interface SkeletonJoint {
@@ -130,15 +131,6 @@ export async function init(options: InitOptions): Promise<void> {
       `AnthroForge/Web: failed to fetch Part Pack (${options.partPackUrl}): ${packResponse.status} ${packResponse.statusText}`,
     );
   }
-
-  // NOTE: `licenseKey` is accepted here per the frozen `InitOptions` shape
-  // but there is no wasm-side export in the current ABI that validates or
-  // consumes a license key (only `init_part_registry_from_pack`,
-  // `generate_character`, etc. are exposed — see the task doc's confirmed
-  // export list). It is intentionally unused below rather than silently
-  // sent somewhere unverified. Flagging this rather than guessing at a
-  // validation call that doesn't exist in the ABI.
-  void options.licenseKey;
 
   const wasmBytes = await wasmResponse.arrayBuffer();
   const packBytes = new Uint8Array(await packResponse.arrayBuffer());

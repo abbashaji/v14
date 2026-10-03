@@ -15,7 +15,6 @@ import { init, generate, getLastError, getSkeleton } from "@anthroforge/web";
 
 await init({
   partPackUrl: "/parts/cc0_body.afpp", // a v2 Part Pack (see below)
-  licenseKey: "",
 });
 
 const character = generate({
@@ -36,6 +35,8 @@ if (!character) {
   console.error(getLastError());
 }
 ```
+
+`init()` also accepts a `licenseKey` option; it is optional and currently ignored.
 
 `generate()` returns de-interleaved typed arrays (`positions`, `normals`, `uvs`,
 `boneIndices`, `boneWeights`, `indices`). `getSkeleton()` returns the global

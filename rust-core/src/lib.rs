@@ -25,49 +25,30 @@
 //! operation returns a `Result` that is converted to a `bool`/null-pointer
 //! sentinel at the `extern "C"` boundary.
 //!
-//! # Panic behavior at the FFI boundary (Test 03 finding)
+//! # Panic behavior at the FFI boundary
 //! The release profile sets `panic = "unwind"` (changed from `"abort"` —
 //! see `Cargo.toml`'s comment and `RESULTS-03.md` for the empirical
-//! verification and full reasoning). This is a two-tier defense, and
-//! callers should understand both tiers:
+//! verification and full reasoning).
 //!
-//! **This framing assumes a target where `panic = "unwind"` actually
-//! unwinds.** On `wasm32-unknown-unknown`, it does not: confirmed
-//! empirically (AnthroForge/Web wasm port) by triggering a genuine
-//! internal panic through a real compiled `.wasm` in a real JS host and
-//! observing the module trap (`RuntimeError: unreachable`) rather than
-//! recovering through `catch_unwind`. On that target there is
-//! effectively **no surviving tier** — any internal panic anywhere traps
-//! the whole module, regardless of which of the two tiers below it
-//! originated in. Everything below this note is verified only for the
-//! native build; it remains correct there, it just does not carry across
-//! targets.
+//! **Native targets.** `generate_character`, `init_part_registry`,
+//! `init_part_registry_from_pack`, `get_skeleton`, `free_skeleton_buffer`
+//! and the atlas exports (`generate_runtime_atlas`, `free_atlas_buffer`)
+//! wrap their bodies in `std::panic::catch_unwind` and convert an internal
+//! panic into a null / `false` / no-op return. `generate_character`,
+//! `init_part_registry`, `init_part_registry_from_pack` and `get_skeleton`
+//! also set a last-error text of the form
+//! `<export name>: internal panic suppressed at FFI boundary`, readable
+//! through `anthroforge_last_error()`; `free_skeleton_buffer` only prints a
+//! line to stderr. This is verified by unit tests that inject a panic into
+//! three of them (`generate_character`, `init_part_registry`,
+//! `init_part_registry_from_pack`); the other exports are covered by their
+//! own earlier tests or by code reading, not by those three tests.
 //!
-//! - `generate_runtime_atlas`/`free_atlas_buffer` (`texture_atlas.rs`)
-//!   wrap their bodies in `std::panic::catch_unwind` and convert a caught
-//!   panic into a clean `null`/no-op return. With `panic = "unwind"` this
-//!   now actually works, confirmed empirically: an internal panic no
-//!   longer crashes the process for these two exports.
-//! - `init_part_registry` and `generate_character` do **not** wrap
-//!   themselves in `catch_unwind`. If an internal panic ever occurs in
-//!   their call graph, Rust's own FFI-unwind guard converts the escaping
-//!   unwind into a process abort at the `extern "C"` boundary (this
-//!   happens regardless of the crate's `panic` profile setting, because
-//!   neither function is declared `extern "C-unwind"`) — confirmed
-//!   empirically in `RESULTS-03.md`. In other words, switching the crate
-//!   to `panic = "unwind"` did not change these two exports' behavior at
-//!   all: they still abort on any internal panic, exactly as before.
-//!   They were audited and rely only on this abort-on-escape guarantee,
-//!   not on `panic = "abort"` specifically, for correctness — see
-//!   `RESULTS-03.md` for the audit (`GLOBAL_REGISTRY` is only written
-//!   after the local `parts` map is fully built, so a panic before that
-//!   point leaves it untouched; a panic after it cannot occur because
-//!   nothing panic-prone runs after the write).
-//!
-//! C++ callers should treat every export in this crate as fallible-by-
-//! crash for internal panics that occur outside the two guarded atlas
-//! functions, and treat `generate_runtime_atlas`/`free_atlas_buffer` as
-//! panic-safe (null/no-op on internal panic, no crash).
+//! **wasm32.** `panic = "unwind"` does not unwind on
+//! `wasm32-unknown-unknown`: an internal panic through a real compiled
+//! `.wasm` in a real JS host traps the module (`RuntimeError: unreachable`)
+//! and nothing recovers it. That is unchanged by the `catch_unwind` wrappers
+//! above and was not re-measured when they were added.
 
 mod bind_pose_fit;
 mod body_mutation;
@@ -101,6 +82,25 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::slice;
 use std::sync::OnceLock;
+
+// Test-only panic hook. A test arms it for one export by name; the matching
+// export then panics on its own thread, inside its `catch_unwind`, exactly
+// once. Per-thread on purpose, so concurrently running tests cannot trigger
+// each other.
+#[cfg(test)]
+thread_local! {
+    static INJECT_PANIC: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn inject_panic_if_armed(site: &'static str) {
+    let armed = INJECT_PANIC.with(|c| c.get()) == Some(site);
+    if armed {
+        INJECT_PANIC.with(|c| c.set(None));
+        panic!("test-injected panic at {site}");
+    }
+}
 
 // ============================================================================
 // FFI struct layouts — exact, byte-for-byte, verified against the C++ mirror.
@@ -651,14 +651,23 @@ pub extern "C" fn init_part_registry(asset_dir: *const c_char) -> bool {
     // thread.
     clear_last_error();
 
-    match init_part_registry_impl(asset_dir) {
-        Ok(part_count) => {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        inject_panic_if_armed("init_part_registry");
+        init_part_registry_impl(asset_dir)
+    })) {
+        Ok(Ok(part_count)) => {
             eprintln!("[anthroforge] initialized part registry with {part_count} part(s)");
             true
         }
-        Err(message) => {
+        Ok(Err(message)) => {
             eprintln!("[anthroforge] init_part_registry failed: {message}");
             set_last_error(format!("init_part_registry failed: {message}"));
+            false
+        }
+        Err(_) => {
+            eprintln!("[anthroforge] init_part_registry: internal panic suppressed at FFI boundary");
+            set_last_error("init_part_registry: internal panic suppressed at FFI boundary");
             false
         }
     }
@@ -701,16 +710,29 @@ pub extern "C" fn init_part_registry_from_pack(
 ) -> bool {
     clear_last_error();
 
-    match init_part_registry_from_pack_impl(pack_bytes_ptr, pack_bytes_len) {
-        Ok(part_count) => {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        inject_panic_if_armed("init_part_registry_from_pack");
+        init_part_registry_from_pack_impl(pack_bytes_ptr, pack_bytes_len)
+    })) {
+        Ok(Ok(part_count)) => {
             eprintln!(
                 "[anthroforge] initialized part registry with {part_count} part(s) (from pack)"
             );
             true
         }
-        Err(message) => {
+        Ok(Err(message)) => {
             eprintln!("[anthroforge] init_part_registry_from_pack failed: {message}");
             set_last_error(format!("init_part_registry_from_pack failed: {message}"));
+            false
+        }
+        Err(_) => {
+            eprintln!(
+                "[anthroforge] init_part_registry_from_pack: internal panic suppressed at FFI boundary"
+            );
+            set_last_error(
+                "init_part_registry_from_pack: internal panic suppressed at FFI boundary",
+            );
             false
         }
     }
@@ -1185,6 +1207,22 @@ fn init_part_registry_from_pack_impl(
 /// whole call (see above) and does not by itself cause a null return.
 #[no_mangle]
 pub extern "C" fn generate_character(dna: *const CharacterDNA) -> *mut MeshOutputBuffer {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        inject_panic_if_armed("generate_character");
+        generate_character_impl(dna)
+    })) {
+        Ok(buffer) => buffer,
+        Err(_) => {
+            eprintln!("[anthroforge] generate_character: internal panic suppressed at FFI boundary");
+            set_last_error("generate_character: internal panic suppressed at FFI boundary");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Body of [`generate_character`], run inside its `catch_unwind`.
+fn generate_character_impl(dna: *const CharacterDNA) -> *mut MeshOutputBuffer {
     // See `init_part_registry`'s matching comment: always clear first, so
     // a successful call never inherits a stale error from an earlier
     // failing one on this thread.
@@ -2177,6 +2215,70 @@ mod tests {
             // true here, since we copy it out immediately.
             Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
         }
+    }
+
+    #[test]
+    fn injected_panic_in_generate_character_is_suppressed() {
+        INJECT_PANIC.with(|c| c.set(Some("generate_character")));
+        let result = generate_character(std::ptr::null());
+        assert!(result.is_null());
+        let message = last_error_message().expect("suppressed panic must set a last error");
+        assert!(
+            message.contains("generate_character")
+                && message.contains("internal panic suppressed at FFI boundary"),
+            "unexpected last error: {message}"
+        );
+
+        // Unarmed second call: the wrapper must have left no stuck state.
+        let again = generate_character(std::ptr::null());
+        assert!(again.is_null());
+        let message = last_error_message().expect("null dna must set a last error");
+        assert!(
+            message.contains("dna pointer was null"),
+            "unexpected last error: {message}"
+        );
+    }
+
+    #[test]
+    fn injected_panic_in_init_part_registry_from_pack_is_suppressed() {
+        INJECT_PANIC.with(|c| c.set(Some("init_part_registry_from_pack")));
+        let ok = init_part_registry_from_pack(std::ptr::null(), 0);
+        assert!(!ok);
+        let message = last_error_message().expect("suppressed panic must set a last error");
+        assert!(
+            message.contains("init_part_registry_from_pack")
+                && message.contains("internal panic suppressed at FFI boundary"),
+            "unexpected last error: {message}"
+        );
+
+        let again = init_part_registry_from_pack(std::ptr::null(), 0);
+        assert!(!again);
+        let message = last_error_message().expect("null pack must set a last error");
+        assert!(
+            message.contains("pack_bytes_ptr was null"),
+            "unexpected last error: {message}"
+        );
+    }
+
+    #[test]
+    fn injected_panic_in_init_part_registry_is_suppressed() {
+        INJECT_PANIC.with(|c| c.set(Some("init_part_registry")));
+        let ok = init_part_registry(std::ptr::null());
+        assert!(!ok);
+        let message = last_error_message().expect("suppressed panic must set a last error");
+        assert!(
+            message.contains("init_part_registry")
+                && message.contains("internal panic suppressed at FFI boundary"),
+            "unexpected last error: {message}"
+        );
+
+        let again = init_part_registry(std::ptr::null());
+        assert!(!again);
+        let message = last_error_message().expect("null dir must set a last error");
+        assert!(
+            message.contains("asset_dir pointer was null"),
+            "unexpected last error: {message}"
+        );
     }
 
     #[test]

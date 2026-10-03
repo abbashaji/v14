@@ -11,7 +11,7 @@ import { init, generate } from "@anthroforge/web";
 import { toBufferGeometry, hasAtlas } from "@anthroforge/web-three";
 import * as THREE from "three";
 
-await init({ partPackUrl: "/my-pack.afpp", licenseKey: "..." });
+await init({ partPackUrl: "/my-pack.afpp" });
 
 const character = generate({ /* ... */ });
 if (character) {
